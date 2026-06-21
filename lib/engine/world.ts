@@ -1,5 +1,7 @@
 import { generateMap } from "./mapgen";
 import { kingdomsTick } from "./kingdoms";
+import { religionTick } from "./religion";
+import { tradeTick } from "./trade";
 import { jobName, personName, settlementName } from "./names";
 import { mulberry32, RNG, randInt } from "./prng";
 import {
@@ -85,6 +87,10 @@ export function createWorld(seed: number): World {
     wars: [],
     nextKingdomId: 0,
     nextArmyId: 0,
+    religions: [],
+    tradeRoutes: [],
+    nextReligionId: 0,
+    nextTradeId: 0,
     territory: new Int16Array(map.width * map.height).fill(-1),
     territoryVersion: 0,
     events: [],
@@ -272,6 +278,8 @@ export function step(world: World): void {
 
   growSettlements(world, rng);
   kingdomsTick(world, rng);
+  religionTick(world, rng);
+  tradeTick(world, rng);
 }
 
 // Found a settlement at a settler's position if far enough from existing ones.
@@ -299,6 +307,7 @@ function tryFoundSettlement(world: World, s: Settler, rng: RNG): void {
     stock: emptyStock(),
     tier: "camp",
     kingdomId: -1,
+    religionId: -1,
     wealth: 0,
     loyalty: 60,
     defense: 5,

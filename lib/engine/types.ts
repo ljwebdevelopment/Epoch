@@ -67,6 +67,7 @@ export interface Settlement {
   stock: Record<ResourceType, number>;
   tier: SettlementTier;
   kingdomId: number; // -1 if independent
+  religionId: number; // -1 if none
   wealth: number; // accumulated gold-equivalent
   loyalty: number; // 0-100, to its kingdom
   defense: number; // siege resistance
@@ -76,6 +77,7 @@ export interface Kingdom {
   id: number;
   name: string;
   ruler: string;
+  rulerSince: number; // tick the current ruler took the throne
   color: string; // css color for UI
   rgb: [number, number, number]; // for border/territory rendering
   capital: number; // settlement id
@@ -109,14 +111,39 @@ export interface War {
   started: number; // tick
 }
 
+export interface Religion {
+  id: number;
+  name: string;
+  symbol: string; // a glyph drawn on the map
+  color: string;
+  holyCity: number; // settlement id
+  founded: number; // tick
+  followers: number; // aggregate population of adherents
+  members: number[]; // settlement ids
+  parent: number; // religion this schismed from, or -1
+  alive: boolean;
+}
+
+export interface TradeRoute {
+  id: number;
+  a: number; // settlement id
+  b: number; // settlement id
+  good: ResourceType;
+  volume: number; // throughput, drives wealth + visual thickness
+  phase: number; // animation offset for the travelling caravan
+}
+
 export type EventKind =
   | "settlement"
   | "kingdom"
+  | "ruler"
   | "war"
   | "battle"
   | "capture"
   | "collapse"
-  | "diplomacy";
+  | "diplomacy"
+  | "religion"
+  | "trade";
 
 export interface WorldEvent {
   tick: number;
@@ -138,6 +165,11 @@ export interface World {
   wars: War[];
   nextKingdomId: number;
   nextArmyId: number;
+
+  religions: Religion[];
+  tradeRoutes: TradeRoute[];
+  nextReligionId: number;
+  nextTradeId: number;
 
   // Per-land-tile kingdom ownership, -1 if unclaimed. Recomputed periodically.
   territory: Int16Array;

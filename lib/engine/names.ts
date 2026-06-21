@@ -51,6 +51,38 @@ export function rulerName(rng: RNG): string {
   return `${pick(rng, RULER_TITLES)} ${pick(rng, PERSON_FIRST)}${regnal}`;
 }
 
+const FAITH_ROOTS = [
+  "Sol", "Lun", "Vael", "Orin", "Thal", "Myr", "Aza", "Kael", "Ner", "Quor",
+  "Sere", "Vyr", "Eth", "Drael", "Oss", "Pyr", "Aether", "Umbra", "Ignis",
+];
+
+const FAITH_FORMS = [
+  "The Way of {n}",
+  "Church of {n}",
+  "The {n} Covenant",
+  "Cult of {n}",
+  "The {n}ite Faith",
+  "Order of {n}",
+  "The {n} Light",
+];
+
+const SCHISM_PREFIX = [
+  "Reformed", "Orthodox", "Old", "True", "Ascendant", "Hidden",
+];
+
+export const FAITH_SYMBOLS = [
+  "☥", "☼", "☾", "✶", "⚚", "☯", "✠", "⟁", "♆", "☩", "❂", "⌖", "✺", "⚜",
+];
+
+export function religionName(rng: RNG): string {
+  const root = pick(rng, FAITH_ROOTS);
+  return pick(rng, FAITH_FORMS).replace("{n}", root);
+}
+
+export function schismName(rng: RNG, base: string): string {
+  return `The ${pick(rng, SCHISM_PREFIX)} ${base.replace(/^(The |Church of |Cult of |Order of )/, "")}`;
+}
+
 export const JOBS = [
   "Forager", "Hunter", "Woodcutter", "Miner", "Farmer", "Wanderer",
 ] as const;

@@ -7,7 +7,7 @@ import { renderTerritoryOverlay } from "@/lib/engine/kingdoms";
 import { World, WorldEvent } from "@/lib/engine/types";
 
 interface Camera {
-  x: number; // centre, tile coords
+  x: number;
   y: number;
   zoom: number;
 }
@@ -17,21 +17,35 @@ interface Stats {
   population: number;
   settlements: number;
   kingdoms: number;
+  religions: number;
   wars: number;
+  routes: number;
 }
 
-// Ticks of simulation advanced per real second at speed 1.
 const TICKS_PER_SECOND = 30;
 
 const EVENT_COLOR: Record<string, string> = {
   settlement: "#d8c79a",
   kingdom: "#f2cf52",
+  ruler: "#e8b14c",
   war: "#e06a4f",
   battle: "#ff8c6b",
   capture: "#ff6b6b",
   collapse: "#b06bd8",
   diplomacy: "#6bc6e0",
+  religion: "#8fd3c2",
+  trade: "#d9b46a",
 };
+
+// Events worth pinning to the permanent timeline.
+const MAJOR = new Set([
+  "kingdom",
+  "war",
+  "capture",
+  "collapse",
+  "religion",
+  "ruler",
+]);
 
 export default function EpochSimulation() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -40,14 +54,21 @@ export default function EpochSimulation() {
   const territoryRef = useRef<HTMLCanvasElement | null>(null);
   const territoryVersionRef = useRef(-1);
   const cameraRef = useRef<Camera>({ x: 110, y: 75, zoom: 4 });
+
+  const milestonesRef = useRef<WorldEvent[]>([]);
+  const lastSampleTickRef = useRef(0);
+
   const [stats, setStats] = useState<Stats>({
     year: 0,
     population: 0,
     settlements: 0,
     kingdoms: 0,
+    religions: 0,
     wars: 0,
+    routes: 0,
   });
   const [events, setEvents] = useState<WorldEvent[]>([]);
+  const [timeline, setTimeline] = useState<WorldEvent[]>([]);
 
   function bakeTerritory(world: World) {
     const off = territoryRef.current ?? document.createElement("canvas");
@@ -60,7 +81,6 @@ export default function EpochSimulation() {
     territoryVersionRef.current = world.territoryVersion;
   }
 
-  // Build (or rebuild) the world and bake its terrain bitmap.
   function buildWorld(seed: number) {
     const world = createWorld(seed);
     worldRef.current = world;
@@ -72,6 +92,9 @@ export default function EpochSimulation() {
     octx.putImageData(renderTerrain(world.map), 0, 0);
     terrainRef.current = off;
     territoryVersionRef.current = -1;
+
+    milestonesRef.current = [];
+    lastSampleTickRef.current = 0;
   }
 
   useEffect(() => {
@@ -120,16 +143,29 @@ export default function EpochSimulation() {
           population: pop || world.settlers.length,
           settlements: world.settlements.filter(Boolean).length,
           kingdoms: world.kingdoms.filter((k) => k && k.alive).length,
+          religions: world.religions.filter((r) => r && r.alive).length,
           wars: world.wars.length,
+          routes: world.tradeRoutes.length,
         });
         setEvents(world.events.slice(-14).reverse());
+
+        // Accumulate major events into the permanent timeline.
+        const since = lastSampleTickRef.current;
+        const fresh = world.events.filter((e) => e.tick > since && MAJOR.has(e.kind));
+        if (fresh.length) {
+          milestonesRef.current.push(...fresh);
+          if (milestonesRef.current.length > 80) {
+            milestonesRef.current.splice(0, milestonesRef.current.length - 80);
+          }
+          setTimeline([...milestonesRef.current]);
+        }
+        lastSampleTickRef.current = world.tick;
       }
 
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
 
-    // --- input: drag to pan, wheel to zoom -------------------------------
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
@@ -187,17 +223,37 @@ export default function EpochSimulation() {
 
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(terrainRef.current!, 0, 0);
+    if (territoryRef.current) ctx.drawImage(territoryRef.current, 0, 0);
 
-    // Kingdom territory + borders.
-    if (territoryRef.current) {
-      ctx.drawImage(territoryRef.current, 0, 0);
+    // Trade routes — glowing caravan lanes with a travelling cart.
+    for (const r of world.tradeRoutes) {
+      const a = world.settlements[r.a];
+      const b = world.settlements[r.b];
+      if (!a || !b) continue;
+      ctx.strokeStyle = "#d9b46a";
+      ctx.globalAlpha = 0.25 + Math.min(0.3, r.volume * 0.04);
+      ctx.lineWidth = 0.25 + r.volume * 0.06;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+
+      const f = ((world.tick * 0.01 + r.phase) % 1 + 1) % 1;
+      const cx = a.x + (b.x - a.x) * f;
+      const cy = a.y + (b.y - a.y) * f;
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = RESOURCE_COLOR[r.good] ?? "#f2cf52";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 0.5, 0, Math.PI * 2);
+      ctx.fill();
     }
+    ctx.globalAlpha = 1;
 
     // Resource nodes.
     for (const r of world.map.resources) {
       if (r.amount < 1) continue;
       ctx.fillStyle = RESOURCE_COLOR[r.type];
-      ctx.globalAlpha = 0.4 + 0.4 * (r.amount / r.capacity);
+      ctx.globalAlpha = 0.35 + 0.35 * (r.amount / r.capacity);
       ctx.beginPath();
       ctx.arc(r.x + 0.5, r.y + 0.5, 0.4, 0, Math.PI * 2);
       ctx.fill();
@@ -220,7 +276,7 @@ export default function EpochSimulation() {
     }
     ctx.globalAlpha = 1;
 
-    // Armies on the march — diamond markers in their kingdom's color.
+    // Armies.
     for (const army of world.armies) {
       const k = world.kingdoms[army.kingdomId];
       if (!k) continue;
@@ -246,10 +302,11 @@ export default function EpochSimulation() {
       }
     }
 
-    // Settlements — colored by ruling kingdom, sized by tier.
+    // Settlements + religion glyphs.
     for (const st of world.settlements) {
       if (!st) continue;
       const k = st.kingdomId >= 0 ? world.kingdoms[st.kingdomId] : null;
+      const rel = st.religionId >= 0 ? world.religions[st.religionId] : null;
       const radius =
         st.tier === "city" ? 2.8 : st.tier === "town" ? 2.1 : st.tier === "village" ? 1.5 : 1;
       const color = k && k.alive ? k.color : "#e9cf93";
@@ -266,7 +323,7 @@ export default function EpochSimulation() {
       ctx.strokeStyle = "#120c06";
       ctx.lineWidth = 0.2;
       ctx.stroke();
-      // Capitals get a star-like inner ring.
+
       if (k && k.capital === st.id) {
         ctx.strokeStyle = "#fff4d6";
         ctx.lineWidth = 0.3;
@@ -275,16 +332,42 @@ export default function EpochSimulation() {
         ctx.stroke();
       }
 
+      // Holy-city aura in the faith's color.
+      if (rel && rel.alive && rel.holyCity === st.id) {
+        ctx.strokeStyle = rel.color;
+        ctx.globalAlpha = 0.8;
+        ctx.lineWidth = 0.35;
+        ctx.beginPath();
+        ctx.arc(st.x, st.y, radius * 1.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
       if (cam.zoom > 5 && (st.tier === "city" || st.tier === "town")) {
+        ctx.textAlign = "center";
+        if (rel && rel.alive) {
+          ctx.fillStyle = rel.color;
+          ctx.font = `${Math.max(2.6, 3.4)}px serif`;
+          ctx.fillText(rel.symbol, st.x, st.y - radius - 2.6);
+        }
         ctx.fillStyle = "#f4e2b8";
         ctx.font = `${Math.max(2.4, 3)}px Georgia, serif`;
-        ctx.textAlign = "center";
-        ctx.fillText(st.name, st.x, st.y - radius - 1);
+        ctx.fillText(st.name, st.x, st.y - radius - 0.6);
       }
     }
     ctx.globalAlpha = 1;
     ctx.restore();
   }
+
+  const era =
+    stats.wars > 0
+      ? "Age of War"
+      : stats.religions > 0
+        ? "Age of Faith"
+        : stats.kingdoms > 0
+          ? "Age of Kingdoms"
+          : "Age of Tribes";
+  const maxYear = Math.max(1, stats.year);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#05060a]">
@@ -293,11 +376,14 @@ export default function EpochSimulation() {
       {/* Live telemetry */}
       <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-amber-200/20 bg-black/55 px-4 py-3 font-serif text-amber-100/90 backdrop-blur-sm">
         <div className="text-xl tracking-wide">Epoch</div>
+        <div className="text-xs italic text-amber-100/50">{era}</div>
         <div className="mt-1 text-sm tabular-nums text-amber-100/70">
           <div>Year {stats.year}</div>
           <div>Population {stats.population.toLocaleString()}</div>
           <div>Settlements {stats.settlements}</div>
           <div>Kingdoms {stats.kingdoms}</div>
+          <div>Religions {stats.religions}</div>
+          <div>Trade routes {stats.routes}</div>
           <div className={stats.wars > 0 ? "text-red-300/90" : ""}>
             Active wars {stats.wars}
           </div>
@@ -305,7 +391,7 @@ export default function EpochSimulation() {
       </div>
 
       {/* Historical event feed */}
-      <div className="absolute right-4 top-4 bottom-16 w-72 overflow-hidden rounded-md border border-amber-200/20 bg-black/55 backdrop-blur-sm">
+      <div className="absolute right-4 top-4 bottom-28 w-72 overflow-hidden rounded-md border border-amber-200/20 bg-black/55 backdrop-blur-sm">
         <div className="border-b border-amber-200/15 px-4 py-2 font-serif text-sm tracking-widest text-amber-100/80">
           CHRONICLE
         </div>
@@ -322,8 +408,43 @@ export default function EpochSimulation() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-amber-200/15 bg-black/45 px-4 py-1.5 text-xs text-amber-100/60 backdrop-blur-sm">
-        drag to pan · scroll to zoom · kingdoms rise, war, and fall on their own
+      {/* Timeline of ages */}
+      <div className="absolute bottom-12 left-4 right-4 rounded-md border border-amber-200/20 bg-black/55 px-4 py-2 backdrop-blur-sm">
+        <div className="mb-1 flex items-center justify-between font-serif text-[11px] tracking-widest text-amber-100/70">
+          <span>TIMELINE — {era.toUpperCase()}</span>
+          <span className="tabular-nums text-amber-100/40">Year {stats.year}</span>
+        </div>
+        <div className="relative h-7">
+          <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-amber-200/20" />
+          {timeline.map((e, i) => {
+            const leftPct = Math.min(100, (e.year / maxYear) * 100);
+            return (
+              <div
+                key={`${e.tick}-${i}`}
+                className="group absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
+                style={{ left: `${leftPct}%` }}
+              >
+                <div
+                  className="h-3 w-[3px] rounded-full"
+                  style={{ backgroundColor: EVENT_COLOR[e.kind] ?? "#d8c79a" }}
+                />
+                <div className="pointer-events-none absolute bottom-5 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded border border-amber-200/20 bg-black/90 px-2 py-1 text-[10px] text-amber-100/90 group-hover:block">
+                  Yr {e.year}: {e.text}
+                </div>
+              </div>
+            );
+          })}
+          <div className="absolute bottom-0 left-0 text-[9px] tabular-nums text-amber-100/30">
+            Yr 1
+          </div>
+          <div className="absolute bottom-0 right-0 text-[9px] tabular-nums text-amber-100/30">
+            Yr {stats.year}
+          </div>
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 text-[11px] text-amber-100/40">
+        drag to pan · scroll to zoom · history unfolds on its own
       </div>
     </div>
   );

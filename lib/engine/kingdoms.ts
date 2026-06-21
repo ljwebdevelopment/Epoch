@@ -77,6 +77,7 @@ function foundKingdom(world: World, seed: Settlement, rng: RNG): Kingdom {
     id,
     name: kingdomName(rng),
     ruler: rulerName(rng),
+    rulerSince: world.tick,
     color: css,
     rgb,
     capital: seed.id,
@@ -445,6 +446,7 @@ function captureSettlement(world: World, army: Army, target: Settlement): void {
     // Losing the capital can shatter a kingdom's will.
     old.stability -= 30;
     old.ruler = rulerName(() => Math.random());
+    old.rulerSince = world.tick;
   }
 
   army.state = "return";
@@ -497,6 +499,32 @@ function rebellionCheck(world: World, rng: RNG): void {
   }
 }
 
+// ---- succession ------------------------------------------------------------
+
+// Rulers eventually die (or are deposed) and a successor takes the throne.
+function successionTick(world: World, rng: RNG): void {
+  for (const k of world.kingdoms) {
+    if (!k || !k.alive) continue;
+    const reign = world.tick - k.rulerSince;
+    // Longer reigns and instability raise the odds each check.
+    const odds = 0.02 + reign * 0.00005 + (k.stability < 40 ? 0.04 : 0);
+    if (rng() < odds) {
+      const old = k.ruler;
+      k.ruler = rulerName(rng);
+      k.rulerSince = world.tick;
+      const deposed = k.stability < 40 && rng() < 0.5;
+      k.stability = Math.max(0, k.stability + (deposed ? -10 : -3));
+      logEvent(
+        world,
+        "ruler",
+        deposed
+          ? `${old} of ${k.name} is overthrown; ${k.ruler} seizes power.`
+          : `${old} of ${k.name} dies; ${k.ruler} ascends the throne.`,
+      );
+    }
+  }
+}
+
 // ---- public entry point ----------------------------------------------------
 
 export function kingdomsTick(world: World, rng: RNG): void {
@@ -512,6 +540,7 @@ export function kingdomsTick(world: World, rng: RNG): void {
   if (world.tick % 45 === 0) {
     diplomacyTick(world, rng);
     rebellionCheck(world, rng);
+    successionTick(world, rng);
   }
   if (world.tick % 60 === 0) {
     declareWars(world, rng);
