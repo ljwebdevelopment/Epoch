@@ -25,6 +25,32 @@ export function personName(rng: RNG): string {
   return pick(rng, PERSON_FIRST);
 }
 
+const REALM_FORMS = [
+  "Kingdom of {n}",
+  "Realm of {n}",
+  "Dominion of {n}",
+  "Empire of {n}",
+  "{n}an League",
+  "Crown of {n}",
+  "{n}mark",
+];
+
+const RULER_TITLES = [
+  "King", "Queen", "High King", "Warlord", "Matriarch", "Patriarch",
+  "Chieftain", "Emperor", "Empress", "Archon",
+];
+
+export function kingdomName(rng: RNG): string {
+  const root = pick(rng, SYLL_START) + pick(rng, ["a", "or", "en", "ia", "oth", "ar"]);
+  return pick(rng, REALM_FORMS).replace("{n}", root);
+}
+
+export function rulerName(rng: RNG): string {
+  const numerals = ["I", "II", "III", "IV", "V"];
+  const regnal = rng() < 0.5 ? " " + pick(rng, numerals) : "";
+  return `${pick(rng, RULER_TITLES)} ${pick(rng, PERSON_FIRST)}${regnal}`;
+}
+
 export const JOBS = [
   "Forager", "Hunter", "Woodcutter", "Miner", "Farmer", "Wanderer",
 ] as const;

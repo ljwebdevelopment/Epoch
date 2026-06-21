@@ -1,4 +1,5 @@
 import { generateMap } from "./mapgen";
+import { kingdomsTick } from "./kingdoms";
 import { jobName, personName, settlementName } from "./names";
 import { mulberry32, RNG, randInt } from "./prng";
 import {
@@ -79,6 +80,14 @@ export function createWorld(seed: number): World {
     settlers,
     settlements: [],
     nextSettlementId: 0,
+    kingdoms: [],
+    armies: [],
+    wars: [],
+    nextKingdomId: 0,
+    nextArmyId: 0,
+    territory: new Int16Array(map.width * map.height).fill(-1),
+    territoryVersion: 0,
+    events: [],
   };
 }
 
@@ -262,6 +271,7 @@ export function step(world: World): void {
   }
 
   growSettlements(world, rng);
+  kingdomsTick(world, rng);
 }
 
 // Found a settlement at a settler's position if far enough from existing ones.
@@ -288,29 +298,77 @@ function tryFoundSettlement(world: World, s: Settler, rng: RNG): void {
     founded: world.tick,
     stock: emptyStock(),
     tier: "camp",
+    kingdomId: -1,
+    wealth: 0,
+    loyalty: 60,
+    defense: 5,
   };
   world.settlements[id] = settlement;
   s.home = id;
+  world.events.push({
+    tick: world.tick,
+    year: 1 + Math.floor(world.tick / 12),
+    kind: "settlement",
+    text: `A camp is founded at ${settlement.name}.`,
+  });
+  if (world.events.length > 200) world.events.shift();
 }
 
-// Convert stockpiled food into population growth and update tiers.
+// Convert stockpiled food into population growth, accrue wealth from traded
+// goods, and update tiers. Settlements inside a kingdom grow a little faster.
 function growSettlements(world: World, rng: RNG): void {
   if (world.tick % 30 !== 0) return;
   for (const s of world.settlements) {
     if (!s) continue;
-    // Consume food proportional to population; surplus grows the town.
+
+    // Consume food proportional to population; surplus grows the settlement.
     const upkeep = s.population * 0.4;
     s.stock.food -= upkeep;
-    if (s.stock.food > 10) {
+    const protectedBonus = s.kingdomId >= 0 ? 8 : 10;
+    if (s.stock.food > protectedBonus) {
       s.population += 1;
       s.stock.food -= 8;
     } else if (s.stock.food < -6 && s.population > 1) {
       // Famine — people leave or die.
       s.population -= 1;
       s.stock.food = 0;
+      s.loyalty = Math.max(0, s.loyalty - 4);
     }
     if (s.stock.food < 0) s.stock.food = 0;
 
-    s.tier = s.population >= 25 ? "town" : s.population >= 8 ? "village" : "camp";
+    // Wealth comes from valuable goods; minerals convert into treasure.
+    const yield_ =
+      s.stock.gold * 3 + s.stock.spice * 2 + s.stock.iron * 1.2 + s.stock.stone * 0.4;
+    s.wealth += yield_ * 0.25;
+    s.stock.gold *= 0.6;
+    s.stock.spice *= 0.6;
+    s.stock.iron *= 0.7;
+    s.stock.stone *= 0.7;
+    s.wealth *= 0.995; // slow upkeep decay
+
+    // Defenses scale with size and wealth; loyalty drifts toward content.
+    s.defense = Math.max(s.defense, 4 + s.population * 0.25 + s.wealth * 0.01);
+    s.loyalty += (70 - s.loyalty) * 0.05;
+    s.loyalty = Math.max(0, Math.min(100, s.loyalty));
+
+    const prevTier = s.tier;
+    s.tier =
+      s.population >= 60
+        ? "city"
+        : s.population >= 25
+          ? "town"
+          : s.population >= 8
+            ? "village"
+            : "camp";
+
+    if (prevTier !== s.tier && (s.tier === "town" || s.tier === "city")) {
+      world.events.push({
+        tick: world.tick,
+        year: 1 + Math.floor(world.tick / 12),
+        kind: "settlement",
+        text: `${s.name} grows into a ${s.tier}.`,
+      });
+      if (world.events.length > 200) world.events.shift();
+    }
   }
 }
