@@ -83,6 +83,16 @@ export function schismName(rng: RNG, base: string): string {
   return `The ${pick(rng, SCHISM_PREFIX)} ${base.replace(/^(The |Church of |Cult of |Order of )/, "")}`;
 }
 
+const WAR_EPITHETS = [
+  "Ashen", "Long", "Iron", "Bitter", "Crimson", "Hollow", "Thousand-Year",
+  "Broken", "Sundering", "Final", "Whispering", "Salt", "Ember", "Grey",
+];
+const WAR_NOUNS = ["War", "War", "Strife", "Conflict", "Crusade", "Feud", "Rebellion"];
+
+export function warName(rng: RNG): string {
+  return `The ${pick(rng, WAR_EPITHETS)} ${pick(rng, WAR_NOUNS)}`;
+}
+
 export const JOBS = [
   "Forager", "Hunter", "Woodcutter", "Miner", "Farmer", "Wanderer",
 ] as const;

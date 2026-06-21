@@ -50,13 +50,17 @@ function foundReligion(
   };
   world.religions[id] = religion;
   holy.religionId = id;
+  const year = 1 + Math.floor(world.tick / 12);
   if (parent >= 0) {
     logEvent(
       world,
-      `${religion.name} schisms from ${world.religions[parent].name}, centred on ${holy.name}.`,
+      `In the Year ${year}, ${religion.name} broke from ${world.religions[parent].name} in bitter schism, raising new temples in ${holy.name}.`,
     );
   } else {
-    logEvent(world, `${religion.name} is founded in the holy city of ${holy.name}.`);
+    logEvent(
+      world,
+      `In the Year ${year}, prophets in ${holy.name} proclaimed ${religion.name}, and the faithful began to gather.`,
+    );
   }
   return religion;
 }

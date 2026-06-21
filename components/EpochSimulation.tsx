@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createWorld, step } from "@/lib/engine/world";
-import { renderTerrain, RESOURCE_COLOR } from "@/lib/engine/render";
+import { paintTerrain, RESOURCE_COLOR } from "@/lib/engine/render";
 import { renderTerritoryOverlay } from "@/lib/engine/kingdoms";
 import { ResourceType, World, WorldEvent } from "@/lib/engine/types";
 
@@ -31,17 +31,18 @@ interface Selection {
 const BASE_TPS = 30;
 const SPEEDS = [0.5, 1, 2, 4] as const;
 
+// Ink tones tuned to read on parchment.
 const EVENT_COLOR: Record<string, string> = {
-  settlement: "#d8c79a",
-  kingdom: "#f2cf52",
-  ruler: "#e8b14c",
-  war: "#e06a4f",
-  battle: "#ff8c6b",
-  capture: "#ff6b6b",
-  collapse: "#b06bd8",
-  diplomacy: "#6bc6e0",
-  religion: "#8fd3c2",
-  trade: "#d9b46a",
+  settlement: "#5b4a2a",
+  kingdom: "#876214",
+  ruler: "#7a5418",
+  war: "#8a2d1c",
+  battle: "#9a4521",
+  capture: "#7c241c",
+  collapse: "#5e3470",
+  diplomacy: "#1f5a6b",
+  religion: "#2f6a52",
+  trade: "#7a5a1e",
 };
 
 const MAJOR = new Set(["kingdom", "war", "capture", "collapse", "religion", "ruler"]);
@@ -194,6 +195,236 @@ function buildDetail(world: World, sel: Selection): Detail | null {
   };
 }
 
+// ---- atmospheric canvas helpers -------------------------------------------
+
+function drawClouds(
+  ctx: CanvasRenderingContext2D,
+  mw: number,
+  mh: number,
+  t: number,
+): void {
+  for (let i = 0; i < 7; i++) {
+    const seed = i * 131.1;
+    const speed = 0.5 + (i % 3) * 0.22;
+    const cx = (((t * speed + seed) % (mw + 80)) + (mw + 80)) % (mw + 80) - 40;
+    const cy = (i * 53.7) % mh;
+    const r = 16 + (i % 4) * 7;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, "rgba(232,226,210,0.10)");
+    g.addColorStop(0.5, "rgba(214,206,188,0.055)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawSelectionRing(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  t: number,
+): void {
+  const pulse = 0.9 + 0.12 * Math.sin(t * 3);
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,248,224,0.95)";
+  ctx.lineWidth = 0.32;
+  ctx.setLineDash([1.4, 1.0]);
+  ctx.lineDashOffset = -t * 4;
+  ctx.beginPath();
+  ctx.arc(x, y, radius * pulse, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawWavingBanner(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  color: string,
+  t: number,
+): void {
+  const poleH = 3.2;
+  ctx.strokeStyle = "rgba(40,28,14,0.9)";
+  ctx.lineWidth = 0.16;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x, y - poleH);
+  ctx.stroke();
+
+  const top = y - poleH;
+  const w = 2.3;
+  const h = 1.3;
+  const seg = 5;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  for (let i = 0; i <= seg; i++) {
+    const fx = x + (i / seg) * w;
+    const wave = Math.sin(t * 4 + i * 1.1) * 0.22 * (i / seg);
+    if (i === 0) ctx.moveTo(fx, top + wave);
+    else ctx.lineTo(fx, top + wave);
+  }
+  for (let i = seg; i >= 0; i--) {
+    const fx = x + (i / seg) * w;
+    const wave = Math.sin(t * 4 + i * 1.1) * 0.22 * (i / seg);
+    ctx.lineTo(fx, top + h + wave);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "rgba(40,28,14,0.45)";
+  ctx.lineWidth = 0.07;
+  ctx.stroke();
+}
+
+function drawHouse(
+  ctx: CanvasRenderingContext2D,
+  hx: number,
+  hy: number,
+  w: number,
+  roof: string,
+): void {
+  ctx.fillStyle = "#cdb079";
+  ctx.fillRect(hx - w / 2, hy - w / 2, w, w);
+  ctx.strokeStyle = "rgba(46,33,18,0.8)";
+  ctx.lineWidth = 0.07;
+  ctx.strokeRect(hx - w / 2, hy - w / 2, w, w);
+  ctx.fillStyle = roof;
+  ctx.beginPath();
+  ctx.moveTo(hx - w / 2 - 0.12, hy - w / 2);
+  ctx.lineTo(hx, hy - w);
+  ctx.lineTo(hx + w / 2 + 0.12, hy - w / 2);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawStar(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: string,
+): void {
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "rgba(46,33,18,0.7)";
+  ctx.lineWidth = 0.06;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const ang = (Math.PI / 4) * i - Math.PI / 2;
+    const rad = i % 2 === 0 ? r : r * 0.42;
+    const px = x + Math.cos(ang) * rad;
+    const py = y + Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+}
+
+interface MarkerOpts {
+  isCapital: boolean;
+  isHoly: boolean;
+  relColor: string | null;
+  selected: boolean;
+  id: number;
+  t: number;
+}
+
+// A settlement drawn as an evolving landmark — from a lone tent to a
+// walled, bannered capital — so size and grandeur read at a glance.
+function drawSettlement(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  tier: string,
+  color: string,
+  o: MarkerOpts,
+): void {
+  const size =
+    tier === "city" ? 2.4 : tier === "town" ? 1.8 : tier === "village" ? 1.3 : 0.95;
+  const grand = o.isCapital ? size * 1.25 : size;
+
+  // Living glow that gently flickers like hearth-light.
+  const flick = 0.16 + 0.05 * Math.sin(o.t * 2 + o.id * 1.7);
+  ctx.globalAlpha = flick;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, grand * 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Ground shadow.
+  ctx.fillStyle = "rgba(25,16,8,0.4)";
+  ctx.beginPath();
+  ctx.ellipse(x, y + grand * 0.35, grand * 0.95, grand * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Holy aura.
+  if (o.isHoly && o.relColor) {
+    ctx.strokeStyle = o.relColor;
+    ctx.globalAlpha = 0.75;
+    ctx.lineWidth = grand * 0.14;
+    ctx.beginPath();
+    ctx.arc(x, y, grand * 1.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // City / capital walls.
+  if (tier === "city" || o.isCapital) {
+    ctx.strokeStyle = "rgba(58,42,22,0.85)";
+    ctx.lineWidth = grand * 0.16;
+    ctx.beginPath();
+    ctx.arc(x, y, grand * 0.98, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(208,186,130,0.9)";
+    ctx.lineWidth = grand * 0.07;
+    ctx.beginPath();
+    ctx.arc(x, y, grand * 0.98, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Buildings clustered in the centre.
+  const n = tier === "camp" ? 1 : tier === "village" ? 2 : tier === "town" ? 3 : 4;
+  const hw = grand * 0.42;
+  if (n === 1) {
+    // A lone tent.
+    ctx.fillStyle = color;
+    ctx.strokeStyle = "rgba(46,33,18,0.8)";
+    ctx.lineWidth = 0.08;
+    ctx.beginPath();
+    ctx.moveTo(x, y - grand * 0.5);
+    ctx.lineTo(x + grand * 0.45, y + grand * 0.3);
+    ctx.lineTo(x - grand * 0.45, y + grand * 0.3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    for (let i = 0; i < n; i++) {
+      const ang = (Math.PI * 2 * i) / n + 0.4;
+      const rr = grand * 0.45;
+      drawHouse(ctx, x + Math.cos(ang) * rr, y + Math.sin(ang) * rr, hw, color);
+    }
+    // Central keep for towns and larger.
+    ctx.fillStyle = "#bfa06a";
+    ctx.strokeStyle = "rgba(46,33,18,0.85)";
+    ctx.lineWidth = 0.08;
+    const tw = grand * 0.4;
+    const th = grand * 0.85;
+    ctx.fillRect(x - tw / 2, y - th * 0.5, tw, th);
+    ctx.strokeRect(x - tw / 2, y - th * 0.5, tw, th);
+  }
+
+  if (o.isCapital) {
+    drawStar(ctx, x, y - grand * 1.5, grand * 0.5, "#f4e2b8");
+    drawWavingBanner(ctx, x + grand * 0.5, y - grand * 0.9, color, o.t);
+  }
+
+  if (o.selected) drawSelectionRing(ctx, x, y, grand + 1.6, o.t);
+}
+
 export default function EpochSimulation() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const worldRef = useRef<World | null>(null);
@@ -246,15 +477,8 @@ export default function EpochSimulation() {
     seedRef.current = seed;
     const world = createWorld(seed);
     worldRef.current = world;
-
-    const off = document.createElement("canvas");
-    off.width = world.map.width;
-    off.height = world.map.height;
-    const octx = off.getContext("2d")!;
-    octx.putImageData(renderTerrain(world.map), 0, 0);
-    terrainRef.current = off;
+    terrainRef.current = paintTerrain(world.map);
     territoryVersionRef.current = -1;
-
     milestonesRef.current = [];
     lastSampleTickRef.current = 0;
     selectEntity(null);
@@ -278,7 +502,7 @@ export default function EpochSimulation() {
   }
   function zoomBy(factor: number) {
     const cam = cameraRef.current;
-    cam.zoom = Math.max(1.5, Math.min(24, cam.zoom * factor));
+    cam.zoom = Math.max(1.5, Math.min(26, cam.zoom * factor));
   }
 
   useEffect(() => {
@@ -303,6 +527,7 @@ export default function EpochSimulation() {
     function frame(now: number) {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
+      const t = now / 1000;
 
       const world = worldRef.current!;
       if (!pausedRef.current) {
@@ -322,7 +547,7 @@ export default function EpochSimulation() {
         bakeTerritory(world);
       }
 
-      draw(ctx, canvas, world);
+      draw(ctx, canvas, world, t);
 
       if (world.tick % 12 === 0) {
         let pop = 0;
@@ -336,7 +561,7 @@ export default function EpochSimulation() {
           wars: world.wars.length,
           routes: world.tradeRoutes.length,
         });
-        setEvents(world.events.slice(-14).reverse());
+        setEvents(world.events.slice(-16).reverse());
 
         const since = lastSampleTickRef.current;
         const fresh = world.events.filter((e) => e.tick > since && MAJOR.has(e.kind));
@@ -349,7 +574,6 @@ export default function EpochSimulation() {
         }
         lastSampleTickRef.current = world.tick;
 
-        // Refresh the open inspect panel with live values.
         if (selectionRef.current) {
           const d = buildDetail(world, selectionRef.current);
           if (!d) selectEntity(null);
@@ -372,11 +596,9 @@ export default function EpochSimulation() {
     function toWorld(clientX: number, clientY: number) {
       const rect = canvas.getBoundingClientRect();
       const cam = cameraRef.current;
-      const sx = clientX - rect.left;
-      const sy = clientY - rect.top;
       return {
-        x: (sx - rect.width / 2) / cam.zoom + cam.x,
-        y: (sy - rect.height / 2) / cam.zoom + cam.y,
+        x: (clientX - rect.left - rect.width / 2) / cam.zoom + cam.x,
+        y: (clientY - rect.top - rect.height / 2) / cam.zoom + cam.y,
       };
     }
 
@@ -384,13 +606,12 @@ export default function EpochSimulation() {
       const world = worldRef.current!;
       const { x, y } = toWorld(clientX, clientY);
 
-      // Settlements (largest target priority).
       let bestCity = -1;
       let bestCityD = Infinity;
       for (const s of world.settlements) {
         if (!s) continue;
         const radius =
-          s.tier === "city" ? 3.2 : s.tier === "town" ? 2.6 : s.tier === "village" ? 2 : 1.5;
+          s.tier === "city" ? 3.4 : s.tier === "town" ? 2.6 : s.tier === "village" ? 2 : 1.5;
         const d = Math.hypot(s.x - x, s.y - y);
         if (d < radius && d < bestCityD) {
           bestCityD = d;
@@ -402,7 +623,6 @@ export default function EpochSimulation() {
         return;
       }
 
-      // Individual settlers (small targets — need to be zoomed in).
       let bestP = -1;
       let bestPD = 1.1;
       for (const p of world.settlers) {
@@ -417,7 +637,6 @@ export default function EpochSimulation() {
         return;
       }
 
-      // Otherwise the kingdom whose territory was clicked.
       const map = world.map;
       const tx = Math.floor(x);
       const ty = Math.floor(y);
@@ -485,14 +704,17 @@ export default function EpochSimulation() {
     ctx: CanvasRenderingContext2D,
     canvas: HTMLCanvasElement,
     world: World,
+    t: number,
   ) {
     const cam = cameraRef.current;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     const pps = cam.zoom;
     const sel = selectionRef.current;
+    const mw = world.map.width;
+    const mh = world.map.height;
 
-    ctx.fillStyle = "#05060a";
+    ctx.fillStyle = "#0b0704";
     ctx.fillRect(0, 0, w, h);
 
     ctx.save();
@@ -500,39 +722,48 @@ export default function EpochSimulation() {
     ctx.scale(pps, pps);
 
     ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(terrainRef.current!, 0, 0);
-    if (territoryRef.current) ctx.drawImage(territoryRef.current, 0, 0);
+    ctx.drawImage(terrainRef.current!, 0, 0, mw, mh);
+    if (territoryRef.current) ctx.drawImage(territoryRef.current, 0, 0, mw, mh);
 
+    // Drifting clouds — alive even while paused (driven by real time).
+    drawClouds(ctx, mw, mh, t);
+
+    // Trade caravans glide along glowing roads.
     for (const r of world.tradeRoutes) {
       const a = world.settlements[r.a];
       const b = world.settlements[r.b];
       if (!a || !b) continue;
-      ctx.strokeStyle = "#d9b46a";
-      ctx.globalAlpha = 0.25 + Math.min(0.3, r.volume * 0.04);
-      ctx.lineWidth = 0.25 + r.volume * 0.06;
+      ctx.strokeStyle = "#9a7636";
+      ctx.globalAlpha = 0.22 + Math.min(0.28, r.volume * 0.04);
+      ctx.setLineDash([1.5, 1.2]);
+      ctx.lineDashOffset = -t * 3;
+      ctx.lineWidth = 0.22 + r.volume * 0.05;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
-      const f = (((world.tick * 0.01 + r.phase) % 1) + 1) % 1;
+      ctx.setLineDash([]);
+      const f = (((t * 0.06 + r.phase) % 1) + 1) % 1;
       ctx.globalAlpha = 0.9;
-      ctx.fillStyle = RESOURCE_COLOR[r.good] ?? "#f2cf52";
+      ctx.fillStyle = RESOURCE_COLOR[r.good] ?? "#e7b94a";
       ctx.beginPath();
       ctx.arc(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f, 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
 
+    // Resource nodes — faint cartographer's marks.
     for (const r of world.map.resources) {
       if (r.amount < 1) continue;
       ctx.fillStyle = RESOURCE_COLOR[r.type];
-      ctx.globalAlpha = 0.35 + 0.35 * (r.amount / r.capacity);
+      ctx.globalAlpha = 0.3 + 0.3 * (r.amount / r.capacity);
       ctx.beginPath();
-      ctx.arc(r.x + 0.5, r.y + 0.5, 0.4, 0, Math.PI * 2);
+      ctx.arc(r.x + 0.5, r.y + 0.5, 0.38, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
 
+    // Settlers — tiny glowing folk.
     for (const s of world.settlers) {
       const glow =
         s.state === "gather" ? "#ffe39a" : s.carrying > 0 ? "#ffcaa0" : "#cfe8ff";
@@ -550,9 +781,10 @@ export default function EpochSimulation() {
 
     if (sel?.kind === "person") {
       const p = world.settlers[sel.id];
-      if (p) drawSelectionRing(ctx, p.x, p.y, 1.4, world.tick);
+      if (p) drawSelectionRing(ctx, p.x, p.y, 1.4, t);
     }
 
+    // Armies.
     for (const army of world.armies) {
       const k = world.kingdoms[army.kingdomId];
       if (!k) continue;
@@ -569,88 +801,48 @@ export default function EpochSimulation() {
       ctx.stroke();
       ctx.restore();
       if (army.state === "siege") {
-        ctx.globalAlpha = 0.3;
-        ctx.fillStyle = "#ff6b6b";
+        ctx.globalAlpha = 0.25 + 0.1 * Math.sin(t * 6);
+        ctx.fillStyle = "#c4452a";
         ctx.beginPath();
-        ctx.arc(army.x, army.y, 1.8, 0, Math.PI * 2);
+        ctx.arc(army.x, army.y, 1.9, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
     }
 
+    // Settlements as evolving landmarks.
     for (const st of world.settlements) {
       if (!st) continue;
       const k = st.kingdomId >= 0 ? world.kingdoms[st.kingdomId] : null;
       const rel = st.religionId >= 0 ? world.religions[st.religionId] : null;
-      const radius =
-        st.tier === "city" ? 2.8 : st.tier === "town" ? 2.1 : st.tier === "village" ? 1.5 : 1;
-      const color = k && k.alive ? k.color : "#e9cf93";
+      const color = k && k.alive ? k.color : "#c9a96a";
+      drawSettlement(ctx, st.x, st.y, st.tier, color, {
+        isCapital: !!(k && k.capital === st.id),
+        isHoly: !!(rel && rel.alive && rel.holyCity === st.id),
+        relColor: rel?.color ?? null,
+        selected: sel?.kind === "city" && sel.id === st.id,
+        id: st.id,
+        t,
+      });
 
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.22;
-      ctx.beginPath();
-      ctx.arc(st.x, st.y, radius * 1.8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.beginPath();
-      ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#120c06";
-      ctx.lineWidth = 0.2;
-      ctx.stroke();
-
-      if (k && k.capital === st.id) {
-        ctx.strokeStyle = "#fff4d6";
-        ctx.lineWidth = 0.3;
-        ctx.beginPath();
-        ctx.arc(st.x, st.y, radius * 0.5, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      if (rel && rel.alive && rel.holyCity === st.id) {
-        ctx.strokeStyle = rel.color;
-        ctx.globalAlpha = 0.8;
-        ctx.lineWidth = 0.35;
-        ctx.beginPath();
-        ctx.arc(st.x, st.y, radius * 1.5, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-
-      if (sel?.kind === "city" && sel.id === st.id) {
-        drawSelectionRing(ctx, st.x, st.y, radius + 1.6, world.tick);
-      }
-
-      if (cam.zoom > 5 && (st.tier === "city" || st.tier === "town")) {
+      if (cam.zoom > 4.5 && (st.tier === "city" || st.tier === "town")) {
         ctx.textAlign = "center";
         if (rel && rel.alive) {
           ctx.fillStyle = rel.color;
-          ctx.font = `3.4px serif`;
-          ctx.fillText(rel.symbol, st.x, st.y - radius - 2.6);
+          ctx.font = "3.4px serif";
+          ctx.fillText(rel.symbol, st.x, st.y - 4.4);
         }
-        ctx.fillStyle = "#f4e2b8";
-        ctx.font = `3px Georgia, serif`;
-        ctx.fillText(st.name, st.x, st.y - radius - 0.6);
+        const label = st.name.toUpperCase();
+        ctx.font = `600 ${st.tier === "city" ? 3.2 : 2.7}px Cinzel, serif`;
+        ctx.lineWidth = 0.6;
+        ctx.strokeStyle = "rgba(244,232,200,0.85)";
+        ctx.strokeText(label, st.x, st.y - 2.6);
+        ctx.fillStyle = "#3a2a12";
+        ctx.fillText(label, st.x, st.y - 2.6);
       }
     }
     ctx.globalAlpha = 1;
     ctx.restore();
-  }
-
-  function drawSelectionRing(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    radius: number,
-    tick: number,
-  ) {
-    const pulse = 0.85 + 0.15 * Math.sin(tick * 0.2);
-    ctx.strokeStyle = "#fff8e0";
-    ctx.globalAlpha = 0.9;
-    ctx.lineWidth = 0.35;
-    ctx.beginPath();
-    ctx.arc(x, y, radius * pulse, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
   }
 
   const era =
@@ -663,57 +855,103 @@ export default function EpochSimulation() {
           : "Age of Tribes";
   const maxYear = Math.max(1, stats.year);
 
-  return (
-    <div className="relative h-full w-full overflow-hidden bg-[#05060a]">
-      <canvas ref={canvasRef} className="block h-full w-full cursor-grab active:cursor-grabbing" />
+  const btn =
+    "rounded-sm px-2.5 py-1 text-[13px] text-[#2a1d0e] transition-colors hover:bg-[#3a2a12]/10";
 
-      {/* Left column: telemetry + inspect panel */}
-      <div className="pointer-events-none absolute left-4 top-4 bottom-28 flex w-72 flex-col gap-3">
-        <div className="rounded-md border border-amber-200/20 bg-black/55 px-4 py-3 font-serif text-amber-100/90 backdrop-blur-sm">
-          <div className="text-xl tracking-wide">Epoch</div>
-          <div className="text-xs italic text-amber-100/50">{era}</div>
-          <div className="mt-1 grid grid-cols-2 gap-x-4 text-sm tabular-nums text-amber-100/70">
-            <div>Year {stats.year}</div>
-            <div>Pop {stats.population.toLocaleString()}</div>
-            <div>Cities {stats.settlements}</div>
-            <div>Kingdoms {stats.kingdoms}</div>
-            <div>Faiths {stats.religions}</div>
-            <div>Routes {stats.routes}</div>
-            <div className={`col-span-2 ${stats.wars > 0 ? "text-red-300/90" : ""}`}>
-              Active wars {stats.wars}
-            </div>
+  return (
+    <div className="relative h-full w-full overflow-hidden">
+      <canvas
+        ref={canvasRef}
+        className="block h-full w-full cursor-grab active:cursor-grabbing"
+      />
+
+      {/* Aged-map frame, vignette and corner flourishes (non-interactive). */}
+      <div className="pointer-events-none absolute inset-0 z-20">
+        <div className="absolute inset-2 rounded-sm border border-[#b8954e]/45 shadow-[inset_0_0_0_2px_rgba(18,10,4,0.7),inset_0_0_160px_55px_rgba(8,4,2,0.78)]" />
+        <div className="absolute inset-[10px] rounded-sm border border-[#8a6a2e]/30" />
+        {[
+          "left-2 top-2",
+          "right-2 top-2 scale-x-[-1]",
+          "left-2 bottom-2 scale-y-[-1]",
+          "right-2 bottom-2 -scale-100",
+        ].map((pos) => (
+          <div key={pos} className={`absolute ${pos} font-title text-2xl text-[#b8954e]/55`}>
+            ❧
+          </div>
+        ))}
+        {/* Compass rose */}
+        <svg
+          className="absolute bottom-7 right-7 h-24 w-24 text-[#caa765]/55"
+          viewBox="0 0 100 100"
+          fill="none"
+        >
+          <circle cx="50" cy="50" r="34" stroke="currentColor" strokeWidth="1" />
+          <circle cx="50" cy="50" r="26" stroke="currentColor" strokeWidth="0.5" />
+          <polygon points="50,8 56,50 50,46 44,50" fill="currentColor" />
+          <polygon points="50,92 44,50 50,54 56,50" fill="currentColor" opacity="0.5" />
+          <polygon points="8,50 50,44 46,50 50,56" fill="currentColor" opacity="0.5" />
+          <polygon points="92,50 50,56 54,50 50,44" fill="currentColor" opacity="0.5" />
+          <text x="50" y="6" textAnchor="middle" fontSize="9" fill="currentColor" fontFamily="Cinzel, serif">N</text>
+        </svg>
+      </div>
+
+      {/* Title cartouche + realm tally */}
+      <div className="absolute left-5 top-5 z-30 w-60">
+        <div className="parchment brass-frame px-5 py-4">
+          <div className="font-title text-3xl leading-none tracking-wide text-[#2a1d0e]">
+            Epoch
+          </div>
+          <div className="mt-1 font-script text-sm italic text-[#6b4a1c]">
+            {era} · Year {stats.year}
+          </div>
+          <div className="rule my-3" />
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-display text-[12px] uppercase tracking-wide text-[#46340f]">
+            <Stat label="Souls" value={stats.population.toLocaleString()} />
+            <Stat label="Cities" value={String(stats.settlements)} />
+            <Stat label="Realms" value={String(stats.kingdoms)} />
+            <Stat label="Faiths" value={String(stats.religions)} />
+            <Stat label="Routes" value={String(stats.routes)} />
+            <Stat label="Wars" value={String(stats.wars)} danger={stats.wars > 0} />
           </div>
         </div>
 
         {detail && (
-          <div className="pointer-events-auto overflow-y-auto rounded-md border bg-black/70 px-4 py-3 text-amber-100/90 backdrop-blur-sm"
-            style={{ borderColor: detail.accent }}>
+          <div className="parchment brass-frame mt-3 max-h-[52vh] overflow-y-auto thin-scroll px-5 py-4">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <div className="text-[10px] uppercase tracking-widest text-amber-100/40">
-                  {detail.kind}
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block h-3 w-3 rounded-full ring-1 ring-black/30"
+                    style={{ background: detail.accent }}
+                  />
+                  <span className="font-display text-[10px] uppercase tracking-[0.2em] text-[#6b4a1c]">
+                    {detail.kind}
+                  </span>
                 </div>
-                <div className="font-serif text-lg leading-tight" style={{ color: detail.accent }}>
+                <div className="mt-1 font-title text-xl leading-tight text-[#2a1d0e]">
                   {detail.title}
                 </div>
               </div>
               <button
                 onClick={() => selectEntity(null)}
-                className="rounded px-1.5 text-amber-100/50 hover:bg-white/10 hover:text-amber-100"
+                className="rounded px-1.5 text-[#6b4a1c] hover:bg-black/10"
               >
                 ✕
               </button>
             </div>
-            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs tabular-nums">
+            <div className="rule my-3" />
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[13px]">
               {detail.rows.map((r) => (
                 <div key={r.label} className="flex justify-between gap-2">
-                  <span className="text-amber-100/45">{r.label}</span>
-                  <span className="text-right text-amber-100/90">{r.value}</span>
+                  <span className="font-display text-[10px] uppercase tracking-wide text-[#7a5a2e]">
+                    {r.label}
+                  </span>
+                  <span className="text-right text-[#2a1d0e]">{r.value}</span>
                 </div>
               ))}
             </div>
             {detail.extra?.map((x, i) => (
-              <div key={i} className="mt-2 text-xs leading-snug text-amber-100/60">
+              <div key={i} className="mt-2 font-script text-[13px] leading-snug text-[#4a3416]">
                 {x}
               </div>
             ))}
@@ -723,7 +961,7 @@ export default function EpochSimulation() {
                   <button
                     key={l.label}
                     onClick={() => selectEntity(l.sel)}
-                    className="rounded border border-amber-200/25 bg-white/5 px-2 py-0.5 text-xs text-amber-100/80 hover:bg-white/10"
+                    className="rounded-sm border border-[#8a6a2e]/50 bg-[#3a2a12]/5 px-2 py-0.5 text-[12px] text-[#46340f] hover:bg-[#3a2a12]/12"
                   >
                     {l.label}
                   </button>
@@ -734,87 +972,129 @@ export default function EpochSimulation() {
         )}
       </div>
 
-      {/* Playback controls */}
-      <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-1 rounded-full border border-amber-200/20 bg-black/60 px-2 py-1.5 text-amber-100/80 backdrop-blur-sm">
-        <button
-          onClick={togglePause}
-          className="rounded-full px-3 py-1 text-sm hover:bg-white/10"
-          title="Play / pause (space)"
-        >
-          {paused ? "▶ Play" : "⏸ Pause"}
-        </button>
-        <span className="mx-1 h-4 w-px bg-amber-200/20" />
-        {SPEEDS.map((s) => (
-          <button
-            key={s}
-            onClick={() => changeSpeed(s)}
-            className={`rounded-full px-2 py-1 text-xs ${
-              speed === s ? "bg-amber-200/25 text-amber-50" : "hover:bg-white/10"
-            }`}
-          >
-            {s}×
+      {/* Brass control bar */}
+      <div className="absolute left-1/2 top-5 z-30 -translate-x-1/2">
+        <div className="parchment brass-frame flex items-center gap-0.5 px-2 py-1.5">
+          <button onClick={togglePause} className={`${btn} font-display`} title="Play / pause (space)">
+            {paused ? "▶ Play" : "❙❙ Pause"}
           </button>
-        ))}
-        <span className="mx-1 h-4 w-px bg-amber-200/20" />
-        <button onClick={() => zoomBy(1.25)} className="rounded-full px-2 py-1 text-sm hover:bg-white/10" title="Zoom in">＋</button>
-        <button onClick={() => zoomBy(1 / 1.25)} className="rounded-full px-2 py-1 text-sm hover:bg-white/10" title="Zoom out">－</button>
-        <span className="mx-1 h-4 w-px bg-amber-200/20" />
-        <button onClick={resetWorld} className="rounded-full px-3 py-1 text-xs hover:bg-white/10" title="Restart this world">↻ Reset</button>
-        <button onClick={newWorld} className="rounded-full bg-amber-200/15 px-3 py-1 text-xs hover:bg-amber-200/25" title="Generate a new world">✦ New World</button>
-      </div>
-
-      {/* Chronicle */}
-      <div className="absolute right-4 top-4 bottom-28 w-72 overflow-hidden rounded-md border border-amber-200/20 bg-black/55 backdrop-blur-sm">
-        <div className="border-b border-amber-200/15 px-4 py-2 font-serif text-sm tracking-widest text-amber-100/80">
-          CHRONICLE
-        </div>
-        <div className="h-full space-y-2 overflow-y-auto px-4 py-3 pb-12 text-xs leading-snug">
-          {events.length === 0 && (
-            <div className="text-amber-100/40">History has yet to be written…</div>
-          )}
-          {events.map((e, i) => (
-            <div key={`${e.tick}-${i}`} className="flex gap-2">
-              <span className="shrink-0 tabular-nums text-amber-100/40">Yr {e.year}</span>
-              <span style={{ color: EVENT_COLOR[e.kind] ?? "#d8c79a" }}>{e.text}</span>
-            </div>
+          <span className="mx-1 h-4 w-px bg-[#8a6a2e]/40" />
+          {SPEEDS.map((s) => (
+            <button
+              key={s}
+              onClick={() => changeSpeed(s)}
+              className={`rounded-sm px-2 py-1 text-[12px] ${
+                speed === s
+                  ? "bg-[#3a2a12] text-[#e9d4a0]"
+                  : "text-[#2a1d0e] hover:bg-[#3a2a12]/10"
+              }`}
+            >
+              {s}×
+            </button>
           ))}
+          <span className="mx-1 h-4 w-px bg-[#8a6a2e]/40" />
+          <button onClick={() => zoomBy(1.25)} className={btn} title="Zoom in">＋</button>
+          <button onClick={() => zoomBy(1 / 1.25)} className={btn} title="Zoom out">－</button>
+          <span className="mx-1 h-4 w-px bg-[#8a6a2e]/40" />
+          <button onClick={resetWorld} className={`${btn} font-display`} title="Restart this world">↻ Reset</button>
+          <button onClick={newWorld} className="rounded-sm bg-[#3a2a12] px-2.5 py-1 font-display text-[13px] text-[#e9d4a0] hover:bg-[#4a3618]" title="Forge a new world">
+            ✦ New World
+          </button>
         </div>
       </div>
 
-      {/* Timeline */}
-      <div className="absolute bottom-12 left-4 right-4 rounded-md border border-amber-200/20 bg-black/55 px-4 py-2 backdrop-blur-sm">
-        <div className="mb-1 flex items-center justify-between font-serif text-[11px] tracking-widest text-amber-100/70">
-          <span>TIMELINE — {era.toUpperCase()}</span>
-          <span className="tabular-nums text-amber-100/40">Year {stats.year}</span>
-        </div>
-        <div className="relative h-7">
-          <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-amber-200/20" />
-          {timeline.map((e, i) => {
-            const leftPct = Math.min(100, (e.year / maxYear) * 100);
-            return (
-              <div
-                key={`${e.tick}-${i}`}
-                className="group absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
-                style={{ left: `${leftPct}%` }}
-              >
-                <div
-                  className="h-3 w-[3px] rounded-full"
-                  style={{ backgroundColor: EVENT_COLOR[e.kind] ?? "#d8c79a" }}
-                />
-                <div className="pointer-events-none absolute bottom-5 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded border border-amber-200/20 bg-black/90 px-2 py-1 text-[10px] text-amber-100/90 group-hover:block">
-                  Yr {e.year}: {e.text}
-                </div>
+      {/* The Chronicle */}
+      <div className="absolute right-5 top-5 bottom-32 z-30 w-72">
+        <div className="parchment brass-frame flex h-full flex-col">
+          <div className="px-5 pt-4">
+            <div className="font-title text-lg text-[#2a1d0e]">The Chronicle</div>
+            <div className="font-script text-[12px] italic text-[#6b4a1c]">
+              as recorded by the keepers of years
+            </div>
+          </div>
+          <div className="rule mx-5 my-2" />
+          <div className="thin-scroll flex-1 space-y-2.5 overflow-y-auto px-5 pb-5 font-script text-[13.5px] leading-snug">
+            {events.length === 0 && (
+              <div className="italic text-[#6b4a1c]">History has yet to be written…</div>
+            )}
+            {events.map((e, i) => (
+              <div key={`${e.tick}-${i}`} className="border-l-2 pl-2.5" style={{ borderColor: EVENT_COLOR[e.kind] ?? "#5b4a2a" }}>
+                <span className="font-display text-[10px] uppercase tracking-wide text-[#8a6a36]">
+                  Year {e.year}
+                </span>
+                <div style={{ color: EVENT_COLOR[e.kind] ?? "#3a2a12" }}>{e.text}</div>
               </div>
-            );
-          })}
-          <div className="absolute bottom-0 left-0 text-[9px] tabular-nums text-amber-100/30">Yr 1</div>
-          <div className="absolute bottom-0 right-0 text-[9px] tabular-nums text-amber-100/30">Yr {stats.year}</div>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 text-[11px] text-amber-100/40">
-        drag to pan · scroll to zoom · click a city, person, or land to inspect
+      {/* Timeline of ages */}
+      <div className="absolute bottom-9 left-5 right-5 z-30">
+        <div className="parchment brass-frame px-5 py-2.5">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="font-title text-[13px] tracking-wide text-[#2a1d0e]">
+              The Ages of the World
+            </span>
+            <span className="font-script text-[12px] italic text-[#6b4a1c]">
+              {era}
+            </span>
+          </div>
+          <div className="relative h-7">
+            <div className="absolute left-0 right-0 top-1/2 h-[2px] -translate-y-1/2 rounded bg-[#7a5a2e]/40" />
+            {timeline.map((e, i) => {
+              const leftPct = Math.min(100, (e.year / maxYear) * 100);
+              return (
+                <div
+                  key={`${e.tick}-${i}`}
+                  className="group absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
+                  style={{ left: `${leftPct}%` }}
+                >
+                  <div
+                    className="h-3.5 w-[3px] rounded-full ring-1 ring-black/10"
+                    style={{ backgroundColor: EVENT_COLOR[e.kind] ?? "#5b4a2a" }}
+                  />
+                  <div className="pointer-events-none absolute bottom-5 left-1/2 z-10 hidden w-52 -translate-x-1/2 rounded-sm border border-[#8a6a2e]/50 bg-[#efe0bb] px-2 py-1 text-[11px] leading-snug text-[#3a2a12] shadow-lg group-hover:block">
+                    <span className="font-display text-[9px] uppercase tracking-wide text-[#8a6a36]">
+                      Year {e.year}
+                    </span>
+                    <div>{e.text}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="absolute bottom-0 left-0 font-display text-[9px] tracking-wide text-[#7a5a2e]">
+              Year 1
+            </div>
+            <div className="absolute bottom-0 right-0 font-display text-[9px] tracking-wide text-[#7a5a2e]">
+              Year {stats.year}
+            </div>
+          </div>
+        </div>
       </div>
+
+      <div className="pointer-events-none absolute bottom-2.5 left-1/2 z-30 -translate-x-1/2 font-script text-[12px] italic text-[#caa765]/70">
+        drag to wander the map · scroll to draw nearer · touch any city, soul, or realm to read its tale
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  danger,
+}: {
+  label: string;
+  value: string;
+  danger?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-[10px] text-[#7a5a2e]">{label}</span>
+      <span className={`font-display text-[13px] tabular-nums ${danger ? "text-[#8a2d1c]" : "text-[#2a1d0e]"}`}>
+        {value}
+      </span>
     </div>
   );
 }

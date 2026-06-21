@@ -3,12 +3,16 @@ import { Job } from "./names";
 export enum Biome {
   DeepWater = 0,
   Water = 1,
-  Sand = 2,
+  Sand = 2, // beaches / coast
   Grass = 3,
   Forest = 4,
   Hills = 5,
   Mountain = 6,
   Snow = 7,
+  Desert = 8,
+  Swamp = 9,
+  Tundra = 10,
+  Volcano = 11,
 }
 
 export type ResourceType = "food" | "wood" | "stone" | "iron" | "gold" | "spice";
@@ -29,6 +33,7 @@ export interface MapData {
   biome: Uint8Array;
   elevation: Float32Array;
   moisture: Float32Array;
+  temperature: Float32Array; // 0 cold (north) .. 1 hot (south)
   river: Uint8Array; // 1 if a river tile
   resources: ResourceNode[];
   // Spatial lookup: tile index -> resource node index (or -1).
@@ -109,6 +114,7 @@ export interface War {
   attacker: number; // kingdom id
   defender: number; // kingdom id
   started: number; // tick
+  name: string; // the name chroniclers give the conflict
 }
 
 export interface Religion {

@@ -92,7 +92,7 @@ export function tradeTick(world: World, rng: RNG): void {
         });
         logEvent(
           world,
-          `A ${good} trade route opens between ${a.name} and ${best.name}.`,
+          `In the Year ${1 + Math.floor(world.tick / 12)}, merchant caravans bearing ${good} forged a road between ${a.name} and ${best.name}.`,
         );
       }
     }

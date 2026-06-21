@@ -1,4 +1,4 @@
-import { kingdomName, rulerName } from "./names";
+import { kingdomName, rulerName, warName } from "./names";
 import { RNG, randInt } from "./prng";
 import { Army, Kingdom, Settlement, War, World } from "./types";
 import { isWalkable } from "./world";
@@ -58,6 +58,10 @@ function logEvent(
   if (world.events.length > 200) world.events.shift();
 }
 
+function yr(world: World): number {
+  return 1 + Math.floor(world.tick / 12);
+}
+
 function dist(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(ax - bx, ay - by);
 }
@@ -94,7 +98,11 @@ function foundKingdom(world: World, seed: Settlement, rng: RNG): Kingdom {
   };
   world.kingdoms[id] = k;
   seed.kingdomId = id;
-  logEvent(world, "kingdom", `${k.name} is founded, ruled by ${k.ruler} from ${seed.name}.`);
+  logEvent(
+    world,
+    "kingdom",
+    `In the Year ${yr(world)}, ${k.ruler} proclaimed the ${k.name} from the seat of ${seed.name}, and a new banner rose over the land.`,
+  );
   return k;
 }
 
@@ -144,7 +152,11 @@ function recomputeKingdoms(world: World): void {
 
     if (members.length === 0) {
       k.alive = false;
-      logEvent(world, "collapse", `${k.name} collapses into ruin.`);
+      logEvent(
+        world,
+        "collapse",
+        `In the Year ${yr(world)}, the last holdings of the ${k.name} fell silent, and the realm passed into legend and ruin.`,
+      );
       // Scrub references from everyone else.
       for (const o of world.kingdoms) {
         if (!o) continue;
@@ -285,12 +297,22 @@ function declareWars(world: World, rng: RNG): void {
       }
     }
     if (target && rng() < 0.6) {
-      const war: War = { attacker: a.id, defender: target.id, started: world.tick };
+      const name = warName(rng);
+      const war: War = {
+        attacker: a.id,
+        defender: target.id,
+        started: world.tick,
+        name,
+      };
       world.wars.push(war);
       a.wars.push(target.id);
       target.wars.push(a.id);
       setRel(world, a, target, -80);
-      logEvent(world, "war", `${a.name} declares war on ${target.name}.`);
+      logEvent(
+        world,
+        "war",
+        `In the Year ${yr(world)}, the ${a.name} marched upon its rival the ${target.name}, beginning what the chroniclers would name ${name}.`,
+      );
       if (world.wars.length >= MAX_WARS) return;
     }
   }
@@ -438,8 +460,9 @@ function captureSettlement(world: World, army: Army, target: Settlement): void {
   logEvent(
     world,
     "capture",
-    `${conqueror?.name ?? "An army"} captures ${target.name}` +
-      (old ? ` from ${old.name}` : "") + ".",
+    wasCapital
+      ? `The Year ${yr(world)} saw ${target.name}, royal seat of the ${old?.name ?? "fallen realm"}, stormed and taken by the ${conqueror?.name ?? "invaders"}.`
+      : `In the Year ${yr(world)}, ${conqueror?.name ?? "an army"} seized the walls of ${target.name}${old ? ` from the ${old.name}` : ""}.`,
   );
 
   if (wasCapital && old) {
@@ -471,11 +494,11 @@ function resolveBattles(world: World): void {
       if (aWins) {
         b.strength = 0;
         a.strength *= 0.7;
-        logEvent(world, "battle", `${ka.name} routs an army of ${kb.name}.`);
+        logEvent(world, "battle", `The host of the ${ka.name} broke the ${kb.name}'s army upon the field.`);
       } else {
         a.strength = 0;
         b.strength *= 0.7;
-        logEvent(world, "battle", `${kb.name} routs an army of ${ka.name}.`);
+        logEvent(world, "battle", `The host of the ${kb.name} broke the ${ka.name}'s army upon the field.`);
       }
     }
   }
@@ -518,8 +541,8 @@ function successionTick(world: World, rng: RNG): void {
         world,
         "ruler",
         deposed
-          ? `${old} of ${k.name} is overthrown; ${k.ruler} seizes power.`
-          : `${old} of ${k.name} dies; ${k.ruler} ascends the throne.`,
+          ? `In the Year ${yr(world)}, ${old} of the ${k.name} was cast down, and ${k.ruler} seized the throne by force.`
+          : `In the Year ${yr(world)}, ${old} of the ${k.name} passed into the long night; ${k.ruler} took up the crown.`,
       );
     }
   }

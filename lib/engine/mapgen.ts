@@ -7,15 +7,24 @@ const BEACH_LEVEL = 0.42;
 const MOUNTAIN_LEVEL = 0.72;
 const SNOW_LEVEL = 0.85;
 
-// Map elevation + moisture into a biome.
-function classify(elevation: number, moisture: number): Biome {
+// Map elevation + moisture + temperature into a biome. Temperature carries
+// latitude, so the same height reads as tundra in the cold north, desert in
+// the arid south, and forest or marsh in the temperate, wet middle.
+function classify(elevation: number, moisture: number, temp: number): Biome {
   if (elevation < SEA_LEVEL - 0.12) return Biome.DeepWater;
   if (elevation < SEA_LEVEL) return Biome.Water;
   if (elevation < BEACH_LEVEL) return Biome.Sand;
+
+  // Highlands.
   if (elevation > SNOW_LEVEL) return Biome.Snow;
-  if (elevation > MOUNTAIN_LEVEL) return Biome.Mountain;
-  if (elevation > MOUNTAIN_LEVEL - 0.12) return Biome.Hills;
-  if (moisture > 0.55) return Biome.Forest;
+  if (elevation > MOUNTAIN_LEVEL) return temp < 0.22 ? Biome.Snow : Biome.Mountain;
+  if (elevation > MOUNTAIN_LEVEL - 0.1) return Biome.Hills;
+
+  // Lowlands, governed by climate.
+  if (temp < 0.26) return Biome.Tundra;
+  if (temp > 0.7 && moisture < 0.38) return Biome.Desert;
+  if (elevation < BEACH_LEVEL + 0.07 && moisture > 0.66) return Biome.Swamp;
+  if (moisture > 0.54) return Biome.Forest;
   return Biome.Grass;
 }
 
@@ -35,16 +44,22 @@ const RESOURCE_BY_BIOME: Partial<Record<Biome, ResourceType[]>> = {
   [Biome.Hills]: ["stone", "iron", "gold"],
   [Biome.Mountain]: ["iron", "iron", "gold", "stone"],
   [Biome.Sand]: ["spice"],
+  [Biome.Desert]: ["spice", "spice", "gold"],
+  [Biome.Swamp]: ["food", "wood"],
+  [Biome.Tundra]: ["stone", "iron"],
+  [Biome.Volcano]: ["iron", "gold", "stone"],
 };
 
 export function generateMap(seed: number, width: number, height: number): MapData {
   const rng: RNG = mulberry32(seed);
   const elevNoise = new ValueNoise(mulberry32(seed ^ 0x1234));
   const moistNoise = new ValueNoise(mulberry32(seed ^ 0xabcd));
+  const tempNoise = new ValueNoise(mulberry32(seed ^ 0x77fa));
 
   const biome = new Uint8Array(width * height);
   const elevation = new Float32Array(width * height);
   const moisture = new Float32Array(width * height);
+  const temperature = new Float32Array(width * height);
   const river = new Uint8Array(width * height);
 
   const scale = 4.5; // noise zoom — lower = larger continents
@@ -59,13 +74,23 @@ export function generateMap(seed: number, width: number, height: number): MapDat
       e = Math.pow(e, 1.15);
       e *= islandFalloff(x, y, width, height);
       const m = moistNoise.fbm(nx * 1.7 + 11, ny * 1.7 + 7, 4, 0.55, 2.0);
+
+      // Temperature: warm south, cold north, banded by drifting noise and
+      // chilled by altitude.
+      let t = y / height; // 0 north .. 1 south
+      t = t * 0.78 + tempNoise.fbm(nx * 1.3 + 5, ny * 1.3 + 19, 3, 0.5, 2.0) * 0.22;
+      t -= Math.max(0, e - 0.42) * 0.7;
+      t = Math.max(0, Math.min(1, t));
+
       elevation[i] = e;
       moisture[i] = m;
-      biome[i] = classify(e, m);
+      temperature[i] = t;
+      biome[i] = classify(e, m, t);
     }
   }
 
   carveRivers(width, height, elevation, biome, river, rng);
+  placeVolcanoes(width, height, elevation, biome, rng);
 
   const { resources, resourceAt } = placeResources(
     width,
@@ -75,7 +100,59 @@ export function generateMap(seed: number, width: number, height: number): MapDat
     rng,
   );
 
-  return { width, height, biome, elevation, moisture, river, resources, resourceAt };
+  return {
+    width,
+    height,
+    biome,
+    elevation,
+    moisture,
+    temperature,
+    river,
+    resources,
+    resourceAt,
+  };
+}
+
+// Scatter one or two volcanic regions across the tallest peaks, marking a
+// small cluster of tiles so the world has a smouldering, dangerous corner.
+function placeVolcanoes(
+  width: number,
+  height: number,
+  elevation: Float32Array,
+  biome: Uint8Array,
+  rng: RNG,
+): void {
+  const count = randInt(rng, 1, 2);
+  for (let v = 0; v < count; v++) {
+    let bx = -1;
+    let by = -1;
+    let best = MOUNTAIN_LEVEL;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const x = randInt(rng, 4, width - 5);
+      const y = randInt(rng, 4, height - 5);
+      const e = elevation[y * width + x];
+      if (e > best) {
+        best = e;
+        bx = x;
+        by = y;
+      }
+    }
+    if (bx < 0) continue;
+    const radius = randInt(rng, 3, 5);
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const x = bx + dx;
+        const y = by + dy;
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        if (Math.hypot(dx, dy) > radius) continue;
+        const i = y * width + x;
+        const b = biome[i] as Biome;
+        if (b === Biome.Mountain || b === Biome.Hills || b === Biome.Snow) {
+          biome[i] = Biome.Volcano;
+        }
+      }
+    }
+  }
 }
 
 // Trace rivers from high, wet sources by always stepping to the lowest

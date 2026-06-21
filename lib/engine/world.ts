@@ -32,7 +32,12 @@ export function isWater(b: number): boolean {
 export function isWalkable(map: MapData, x: number, y: number): boolean {
   if (x < 0 || y < 0 || x >= map.width || y >= map.height) return false;
   const b = map.biome[(y | 0) * map.width + (x | 0)];
-  return !isWater(b) && b !== Biome.Mountain && b !== Biome.Snow;
+  return (
+    !isWater(b) &&
+    b !== Biome.Mountain &&
+    b !== Biome.Snow &&
+    b !== Biome.Volcano
+  );
 }
 
 function findLandSpawn(map: MapData, rng: RNG): { x: number; y: number } {
