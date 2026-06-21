@@ -56,7 +56,11 @@ interface Detail {
   rows: { label: string; value: string }[];
   links: { label: string; sel: Selection }[];
   extra?: string[];
+  crest?: { color: string; glyph: string };
 }
+
+// Heraldic charges, chosen deterministically so a realm keeps its emblem.
+const CHARGES = ["⚔", "♜", "✦", "☗", "⛨", "♆", "✜", "❂", "⚜", "☉", "✠", "⟁"];
 
 function yearOf(tick: number): number {
   return 1 + Math.floor(tick / 12);
@@ -130,6 +134,7 @@ function buildDetail(world: World, sel: Selection): Detail | null {
       kind: "kingdom",
       title: k.name,
       accent: k.color,
+      crest: { color: k.color, glyph: CHARGES[k.id % CHARGES.length] },
       rows: [
         { label: "Ruler", value: k.ruler },
         { label: "Reign", value: `${yearOf(world.tick) - yearOf(k.rulerSince)} yrs` },
@@ -162,6 +167,7 @@ function buildDetail(world: World, sel: Selection): Detail | null {
       kind: "religion",
       title: `${r.symbol} ${r.name}`,
       accent: r.color,
+      crest: { color: r.color, glyph: r.symbol },
       rows: [
         { label: "Holy city", value: holy?.name ?? "—" },
         { label: "Followers", value: fmt(r.followers) },
@@ -728,6 +734,35 @@ export default function EpochSimulation() {
     // Drifting clouds — alive even while paused (driven by real time).
     drawClouds(ctx, mw, mh, t);
 
+    // Realm names sprawled in faded ink across their lands, as on an atlas.
+    const hasSpacing = "letterSpacing" in ctx;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const k of world.kingdoms) {
+      if (!k || !k.alive || k.members.length < 2) continue;
+      let sx = 0;
+      let sy = 0;
+      let n = 0;
+      for (const id of k.members) {
+        const s = world.settlements[id];
+        if (!s) continue;
+        sx += s.x;
+        sy += s.y;
+        n++;
+      }
+      if (n < 2) continue;
+      const cx = sx / n;
+      const cy = sy / n;
+      const fontSize = Math.min(13, 4 + k.members.length * 0.7);
+      ctx.font = `600 ${fontSize}px Cinzel, serif`;
+      if (hasSpacing) (ctx as unknown as { letterSpacing: string }).letterSpacing = `${fontSize * 0.18}px`;
+      const label = k.name.replace(/^(The |Kingdom of |Realm of |Empire of |Dominion of |Crown of )/, "").toUpperCase();
+      ctx.fillStyle = "rgba(36,24,10,0.17)";
+      ctx.fillText(label, cx, cy);
+    }
+    if (hasSpacing) (ctx as unknown as { letterSpacing: string }).letterSpacing = "0px";
+    ctx.textBaseline = "alphabetic";
+
     // Trade caravans glide along glowing roads.
     for (const r of world.tradeRoutes) {
       const a = world.settlements[r.a];
@@ -918,18 +953,32 @@ export default function EpochSimulation() {
         {detail && (
           <div className="parchment brass-frame mt-3 max-h-[52vh] overflow-y-auto thin-scroll px-5 py-4">
             <div className="flex items-start justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className="inline-block h-3 w-3 rounded-full ring-1 ring-black/30"
-                    style={{ background: detail.accent }}
-                  />
-                  <span className="font-display text-[10px] uppercase tracking-[0.2em] text-[#6b4a1c]">
-                    {detail.kind}
-                  </span>
-                </div>
-                <div className="mt-1 font-title text-xl leading-tight text-[#2a1d0e]">
-                  {detail.title}
+              <div className="flex items-start gap-3">
+                {detail.crest && (
+                  <div
+                    className="mt-0.5 flex h-11 w-9 shrink-0 items-center justify-center text-[20px] text-white/95 shadow-md ring-1 ring-black/40"
+                    style={{
+                      background: `linear-gradient(160deg, ${detail.crest.color}, rgba(0,0,0,0.35))`,
+                      clipPath: "polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%)",
+                      textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+                    }}
+                  >
+                    {detail.crest.glyph}
+                  </div>
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="inline-block h-3 w-3 rounded-full ring-1 ring-black/30"
+                      style={{ background: detail.accent }}
+                    />
+                    <span className="font-display text-[10px] uppercase tracking-[0.2em] text-[#6b4a1c]">
+                      {detail.kind}
+                    </span>
+                  </div>
+                  <div className="mt-1 font-title text-xl leading-tight text-[#2a1d0e]">
+                    {detail.title}
+                  </div>
                 </div>
               </div>
               <button
